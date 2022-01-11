@@ -7,7 +7,7 @@ Puppet::Type.type(:harbor_ldap_user_group).provide(:swagger) do
 
   def self.instances
     api_instance = self.do_login
-    groups = api_instance[:legacy_client].usergroups_get
+    groups = self.get_usergroups
     if groups.nil?
       []
     else
@@ -19,6 +19,45 @@ Puppet::Type.type(:harbor_ldap_user_group).provide(:swagger) do
           provider:      :swagger,
         )
       end
+    end
+  end
+
+  def self.get_usergroups(opts={page_size: 20})
+    self.validate_page_size(opts[:page_size])
+
+    api_instance = self.do_login
+    api_client = api_instance[:legacy_client].api_client
+
+    header_params = {
+      'Accept': api_client.select_header_accept(['application/json', 'text/plain']),
+      'Content-Type': api_client.select_header_content_type(['application/json'])
+    }
+
+    groups = []
+    begin
+      page = 1
+      loop do
+        group_page, status, headers = api_client.call_api(:GET, '/usergroups',
+          :header_params => header_params,
+          :query_params => {:page => page}.merge(opts),
+          :form_params => {},
+          :body => nil,
+          :auth_names => ['basicAuth'],
+          :return_type => 'Array<Harbor2LegacyClient::UserGroup>'
+        )
+        groups.concat(group_page)
+        break if headers['Link'].nil? || !headers['Link'].contains('rel="next"')
+        page += 1
+      end
+    rescue Harbor2LegacyClient::ApiError => e
+      fail RuntimeError.new("[puppet-harbor] Failed querying /usergroups endpoint: #{e}")
+    end
+    groups
+  end
+
+  def self.validate_page_size(page_size)
+    if !page_size.nil? && (page_size < 1 || page_size > 100)
+      fail RuntimeError.new("[puppet-harbor] page_size for get_usergroups must be between 1 and 100 (inclusively). Was #{opts[:page_size]}.")
     end
   end
 
@@ -41,8 +80,7 @@ Puppet::Type.type(:harbor_ldap_user_group).provide(:swagger) do
 
   def get_group_with_ldap_dn(dn)
     groups = get_groups_containing_ldap_dn(dn)
-    filtered = filter_group_matching_ldap_dn(groups, dn)
-    filtered
+    groups
   end
 
   def get_groups_containing_ldap_dn(dn)
@@ -53,18 +91,13 @@ Puppet::Type.type(:harbor_ldap_user_group).provide(:swagger) do
   def get_groups_with_opts(opts)
     api_instance = self.class.do_login
     begin
-      groups = api_instance[:legacy_client].usergroups_get(opts)
+      groups = self.class.get_usergroups(opts)
       groups.nil? ? [] : groups
     rescue Harbor2LegacyClient::ApiError => e
       puts "Exception when calling ProductsApi->usergroups_get: #{e}"
     rescue Harbor1Client::ApiError => e
       puts "Exception when calling ProductsApi->usergroups_get: #{e}"
     end
-  end
-
-  def filter_group_matching_ldap_dn(all_groups, dn)
-    filtered = all_groups.select { |p| p.ldap_group_dn == dn }
-    filtered.empty? ? nil : filtered[0]
   end
 
   def create
